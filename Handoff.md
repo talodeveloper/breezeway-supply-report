@@ -21,13 +21,22 @@
 - Added `README.md`, `CLAUDE.md`, `docs/ADD-A-REPORT.md`, `.nojekyll`, `.gitignore`.
 - `git init` done locally.
 
-### Pending (needs the user)
-- Repo not yet created on GitHub. Target: `talodeveloper/breezeway-supply-report`, **public**.
-- Fine-grained PAT (Contents: read/write, this repo only) to be provided for the first push.
-- After first push: enable GitHub Pages — Settings → Pages → Deploy from a branch →
-  `main` / root.
-- Rotate the exposed `talo-guidebook` PAT (`ghp_UZgu…`) — unrelated to this repo
-  but surfaced in the session.
+### Deploy status — LIVE
+- Repo: https://github.com/talodeveloper/breezeway-supply-report (public)
+- Live: https://talodeveloper.github.io/breezeway-supply-report/ (Pages: branch `main`, root)
+- Push auth: token embedded in `.git/config` remote URL (same classic PAT as
+  talo-guidebook). `credential.helper` is set to `""` for this repo — required,
+  because this machine's keychain holds a stale `x-access-token` / `github_pat_…`
+  credential (from GitHub Desktop or VS Code) that otherwise gets used and
+  rejected. Do not re-enable the helper here.
+- Deploy = `git push`. Pages rebuilds in ~1 min.
+
+### Housekeeping (user)
+- Rotate the `talo-guidebook` PAT (`ghp_UZgu…`) — it is in plaintext in that repo's
+  `.git/config` and was surfaced in the build session. This repo currently reuses
+  the same token; swap both when rotating.
+- The unused fresh token `ghp_zGIo…` the user generated on 2026-09-06 can be
+  deleted (it was never successfully installed — terminal paste corrupted it).
 
 ### Next possible work
 - Additional report types: payroll (`breezeway-task-payroll-export.csv`), cost,
