@@ -1,5 +1,44 @@
 # Handoff
 
+## 2026-09-06 (later) — one-file model + pivot builder
+
+### Done
+- **Upload is now one file at a time.** `setFile()` replaces the old multi-file array.
+- **Report is auto-detected from the filename** via each report's `sourceMatch`. The
+  dropdown became a manual override, with a `""` = "no fixed report — pivot only" option.
+- **New: "Build your own report" pivot builder**, below the fixed report, on every file.
+  Drag fields into Rows / Columns / Value (with `<select>` fallbacks for touch), pick
+  Sum / Average / Min / Max / Count / Count unique. Live table with row, column and
+  grand totals; exports to `custom-report.xlsx`.
+- Verified against the real Breezeway header set: auto-detect, fixed report, pivot
+  numbers (row/col/grand totals all reconcile), `H:MM:SS` → decimal hours, the
+  unrecognized-file pivot-only path, and both Excel exports.
+
+### Design decisions (settled with the user — do not revisit without reason)
+- **Pivot is single-file only, forever.** Cross-file / multi-export pivoting was
+  explicitly rejected. Reason: the exports sit at different grains — Summary is one
+  row per task, Supplies/Cost are one row per line item, Payroll is one row per
+  assignee — and joining them fans out and inflates sums. Concrete example found in
+  the real data: payroll repeats the task's `Total time` (`101:51:22`) on all 3
+  assignee rows, so summing it triples the number.
+- If cross-file is ever revisited, the only safe model is **aggregate each file to a
+  shared key (`Task ID` / `Property ID`) first, then align** — never a row-level join.
+
+### Breezeway data notes (from real exports)
+- All exports share a ~29-column task backbone; `Task ID` and `Property ID` are stable
+  keys. Property *names* are not — the `· <config>` suffix appears inconsistently.
+- Header drift: payroll uses `Assignee` (others `Assignees`) and `Property internal ID`
+  (others `Property Internal ID`), and omits ~10 backbone columns.
+- Item names are not normalized: the bilingual halves flip order between exports
+  (`Toilet paper/Papel de baño` vs `Papel de baño/Toilet paper`), and some items have
+  a blank `Supply ID`. An alias map would be needed for exact item consolidation.
+- All rate/cost fields are currently `0.00` or blank ("No Charge/Internal") — payroll
+  and cost reports would render empty until there is real priced data.
+
+### Next possible work
+- Reports for summary / payroll / cost exports (hold until priced data exists).
+- Optional: a Filters zone in the pivot; an item-name alias map.
+
 ## 2026-09-06 — initial build + repo/deploy setup
 
 ### Done

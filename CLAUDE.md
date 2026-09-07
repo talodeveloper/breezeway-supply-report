@@ -45,6 +45,27 @@ Shared helpers available to any `render()`: `esc`, `t` (trim), `stripConfig`
 (drops `· <config>` suffix), `extractDate` (→ `YYYY-MM-DD`), `parseQty`,
 `downloadSheet(aoa, cols, sheetName, fileName)`.
 
+## Upload model — one file at a time
+
+Deliberate. `setFile()` accepts a single file; `detectReport(name)` picks the report
+by matching the filename against each `sourceMatch`, and the dropdown is only a manual
+override (its `""` option means "no fixed report — pivot only"). An unrecognized file
+still renders the pivot builder against all of its columns.
+
+## Pivot builder
+
+`buildPivotPanel(rows, headers)` renders the "Build your own report" panel from the
+**raw** sheet columns (not the report's logical fields). Drag-and-drop chips into
+Rows / Columns / Value zones, plus `<select>` fallbacks (`.zoneadd`) for touch and
+keyboard. `pivotCompute()` groups and aggregates; totals are recomputed from the
+underlying value arrays, not from the cell values, so Average totals are correct.
+
+Scoped to **one file, no joins** — by design, so a fan-out join can never inflate a
+total. See the conversation history in `Handoff.md` for why cross-file pivoting was
+rejected. Guards in place: `H:MM:SS` → decimal hours in `pivotNum`; a >60 distinct
+column values check that refuses to render; Sum disabled to `count` when no Value
+field is chosen; an amber tip warning against summing task-level repeated fields.
+
 ## Gotchas already fixed (don't reintroduce)
 
 - **CSV must be read as UTF-8 text** — `XLSX.read(text, {type:"string", cellDates:true})`

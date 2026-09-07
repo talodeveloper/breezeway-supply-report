@@ -136,6 +136,43 @@
   .empty{color:var(--ink-soft);font-size:13px;padding:6px 0}
   .stack-actions{margin-top:12px}
 
+  /* Pivot builder */
+  .pivot-intro{margin:0 0 14px;color:var(--ink-soft);font-size:13px;max-width:72ch}
+  .plabel{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft);margin-bottom:6px}
+  .pfields{margin-bottom:14px}
+  #pv-pool{
+    max-height:140px;overflow:auto;padding:9px;border:1px solid var(--line);
+    border-radius:10px;background:#fbfaf4;display:flex;flex-wrap:wrap;gap:6px;align-content:flex-start;
+  }
+  .zones{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px}
+  @media (max-width:820px){ .zones{grid-template-columns:1fr} }
+  .zone{
+    min-height:62px;padding:8px;border:1.5px dashed var(--line);border-radius:10px;background:#fbfaf4;
+    display:flex;flex-wrap:wrap;gap:6px;align-content:flex-start;
+    transition:border-color .15s, background .15s;
+  }
+  .zone.over{border-color:var(--teal);background:var(--teal-tint)}
+  .zempty{color:var(--ink-soft);font-size:12px;padding:3px 2px}
+  .pchip{
+    display:inline-flex;align-items:center;gap:6px;cursor:grab;max-width:100%;
+    border:1px solid var(--line);border-radius:999px;padding:4px 10px;font-size:12.5px;background:#fff;
+  }
+  .pchip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pchip:active{cursor:grabbing}
+  .pchip.placed{background:var(--teal-tint);border-color:#cfe4e0;color:var(--teal-deep);font-weight:600}
+  .pchip .px{border:0;background:transparent;cursor:pointer;font-size:15px;line-height:1;color:inherit;padding:0}
+  .zoneadd{
+    margin-top:8px;width:100%;font:inherit;font-size:12.5px;padding:6px 8px;
+    border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);
+  }
+  .pivot-hint{
+    font-size:12.5px;color:var(--amber-deep);background:var(--amber-tint);
+    border:1px solid #ecdcbf;border-radius:10px;padding:9px 12px;margin:0 0 14px;
+  }
+  td.rowlab{font-weight:600;white-space:nowrap}
+  th.tot,td.tot{background:#f3f1e8;font-weight:700}
+  tfoot td{background:#f3f1e8;font-weight:700;border-top:1px solid var(--line);position:sticky;bottom:0}
+
   a:focus-visible, button:focus-visible, select:focus-visible, .drop:focus-visible{
     outline:2px solid var(--focus);outline-offset:2px;
   }
@@ -149,14 +186,14 @@
   </header>
 
   <section class="panel">
-    <h2>Files <span class="sub">CSV / XLSX / XLS · up to 10</span></h2>
-    <div class="drop" id="drop" tabindex="0" role="button" aria-label="Upload spreadsheet files">
-      <strong>Drag &amp; drop files here</strong>
+    <h2>File <span class="sub">CSV / XLSX / XLS · one at a time</span></h2>
+    <div class="drop" id="drop" tabindex="0" role="button" aria-label="Upload a spreadsheet file">
+      <strong>Drag &amp; drop your Breezeway export here</strong>
       <span>or <span class="link">browse</span> to choose</span>
-      <input type="file" id="file" accept=".csv,.xlsx,.xls" multiple />
+      <input type="file" id="file" accept=".csv,.xlsx,.xls" />
     </div>
     <ul class="files" id="filelist"></ul>
-    <div class="controls">
+    <div class="controls" id="reportctl" hidden>
       <label class="fld" for="report">Report</label>
       <select id="report"></select>
     </div>
@@ -366,12 +403,6 @@
   ];
 
   /* ---------- generic engine ---------- */
-  var files = [];   // { name, workbook }
-
-  function nameIsRecognized(name){
-    return REPORTS.some(function(r){ return r.sourceMatch.test(name); });
-  }
-
   function resolveHeader(variants, sampleRow){
     var keys = Object.keys(sampleRow);
     var lower = keys.map(function(k){ return k.trim().toLowerCase(); });
@@ -382,19 +413,9 @@
     return null;
   }
 
-  // Route uploaded files to a report, resolve logical fields -> real headers.
-  function collectRows(report){
-    var raw = [];
-    files.forEach(function(f){
-      f.workbook.SheetNames.forEach(function(sheetName){
-        if(report.sourceMatch.test(f.name) || report.sourceMatch.test(sheetName)){
-          var arr = XLSX.utils.sheet_to_json(f.workbook.Sheets[sheetName], { defval:null, raw:true });
-          raw = raw.concat(arr);
-        }
-      });
-    });
+  // Map the raw sheet rows onto a report's logical fields.
+  function mapRows(report, raw){
     if(!raw.length) return null;
-
     var sample = null;
     for(var i=0;i<raw.length;i++){ if(raw[i] && Object.keys(raw[i]).length){ sample = raw[i]; break; } }
     sample = sample || raw[0];
@@ -413,89 +434,456 @@
     });
   }
 
+  // First sheet that actually has rows.
+  function readSheet(wb){
+    for(var i=0;i<wb.SheetNames.length;i++){
+      var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[i]], { defval:null, raw:true });
+      if(rows.length) return { sheetName: wb.SheetNames[i], rows: rows };
+    }
+    return { sheetName: wb.SheetNames[0] || "", rows: [] };
+  }
+  function headersOf(rows){
+    var seen = {}, out = [];
+    rows.forEach(function(r){
+      Object.keys(r).forEach(function(k){
+        if(!seen[k] && !/^__EMPTY/.test(k) && k.trim() !== ""){ seen[k] = 1; out.push(k); }
+      });
+    });
+    return out;
+  }
+
+  /* =========================================================================
+     PIVOT BUILDER — works on the raw columns of the single uploaded file.
+     One file only, so there are no joins and no way to inflate a total.
+     ========================================================================= */
+  var SEP = " ";
+  var AGGS = {
+    sum:    { label:"Sum",          numeric:true,  fn:function(v){ return v.reduce(function(a,b){ return a+b; }, 0); } },
+    avg:    { label:"Average",      numeric:true,  fn:function(v){ return v.reduce(function(a,b){ return a+b; }, 0)/v.length; } },
+    min:    { label:"Min",          numeric:true,  fn:function(v){ return Math.min.apply(null, v); } },
+    max:    { label:"Max",          numeric:true,  fn:function(v){ return Math.max.apply(null, v); } },
+    count:  { label:"Count",        numeric:false, fn:function(v){ return v.length; } },
+    countu: { label:"Count unique", numeric:false, fn:function(v){
+                var s = {}; v.forEach(function(x){ s[x] = 1; }); return Object.keys(s).length; } }
+  };
+
+  function pivotNum(v){
+    if(typeof v === "number") return isFinite(v) ? v : null;
+    if(v == null || v instanceof Date) return null;
+    var s = String(v).trim();
+    if(!s) return null;
+    var hms = s.match(/^(\d+):([0-5]\d):([0-5]\d)$/);   // H:MM:SS -> decimal hours
+    if(hms) return (+hms[1]) + (+hms[2])/60 + (+hms[3])/3600;
+    var n = parseFloat(s.replace(/[$,\s]/g, ""));
+    return isNaN(n) ? null : n;
+  }
+  function pivotLabel(v){
+    if(v == null) return "(blank)";
+    if(v instanceof Date) return extractDate(v);
+    var s = String(v).trim();
+    return s === "" ? "(blank)" : s;
+  }
+  function fmtNum(n){
+    if(n == null || !isFinite(n)) return "";
+    return Math.abs(n % 1) < 1e-9 ? String(Math.round(n)) : n.toFixed(2);
+  }
+  function keyCmp(a, b){
+    var na = parseFloat(a), nb = parseFloat(b);
+    if(!isNaN(na) && !isNaN(nb) && String(na) === a && String(nb) === b) return na - nb;
+    return String(a).localeCompare(String(b));
+  }
+
+  function pivotCompute(rows, rowF, colF, valF, aggKey){
+    var agg = AGGS[aggKey] || AGGS.count;
+    var rowKeys = [], colKeys = [], seenR = {}, seenC = {}, buckets = {};
+    rows.forEach(function(r){
+      var rk = rowF.length ? rowF.map(function(f){ return pivotLabel(r[f]); }).join(SEP) : "";
+      var ck = colF.length ? colF.map(function(f){ return pivotLabel(r[f]); }).join(SEP) : "";
+      if(!seenR[rk]){ seenR[rk] = 1; rowKeys.push(rk); }
+      if(!seenC[ck]){ seenC[ck] = 1; colKeys.push(ck); }
+      var raw = valF ? r[valF] : 1;
+      var use = agg.numeric ? pivotNum(raw) : pivotLabel(raw);
+      if(agg.numeric && use === null) return;          // skip non-numeric cells
+      buckets[rk] = buckets[rk] || {};
+      (buckets[rk][ck] = buckets[rk][ck] || []).push(use);
+    });
+    rowKeys.sort(keyCmp); colKeys.sort(keyCmp);
+
+    function agOf(list){ return list && list.length ? agg.fn(list) : null; }
+    function agAll(lists){
+      var all = [];
+      lists.forEach(function(l){ if(l) all = all.concat(l); });
+      return all.length ? agg.fn(all) : null;
+    }
+    var cells = {}, rowTot = {}, colTot = {}, allLists = [];
+    rowKeys.forEach(function(rk){
+      cells[rk] = {};
+      var mine = [];
+      colKeys.forEach(function(ck){
+        var list = (buckets[rk] || {})[ck];
+        cells[rk][ck] = agOf(list);
+        if(list){ mine.push(list); allLists.push(list); }
+      });
+      rowTot[rk] = agAll(mine);
+    });
+    colKeys.forEach(function(ck){
+      var mine = [];
+      rowKeys.forEach(function(rk){ var l = (buckets[rk] || {})[ck]; if(l) mine.push(l); });
+      colTot[ck] = agAll(mine);
+    });
+    return {
+      rowKeys: rowKeys, colKeys: colKeys, cells: cells,
+      rowTot: rowTot, colTot: colTot, grand: agAll(allLists)
+    };
+  }
+
+  function buildPivotPanel(rows, headers){
+    var pv = { rows: [], cols: [], value: null, agg: "sum" };
+    var panel = document.createElement("section");
+    panel.className = "panel";
+    panel.innerHTML =
+      '<h2>Build your own report <span class="sub">any view of this file</span></h2>' +
+      '<p class="pivot-intro">Don\'t see what you\'re looking for above? Drag any field into ' +
+        '<b>Rows</b> or <b>Columns</b>, choose a <b>Value</b> to measure, and the table builds itself. ' +
+        'Everything stays inside this one file, so the numbers can\'t be skewed by combining sources.</p>' +
+      '<div class="pfields"><div class="plabel">Available fields</div><div id="pv-pool"></div></div>' +
+      '<div class="zones">' +
+        '<div><div class="plabel">Rows</div><div class="zone" id="pv-rows"></div>' +
+          '<select class="zoneadd" data-zone="rows"></select></div>' +
+        '<div><div class="plabel">Columns</div><div class="zone" id="pv-cols"></div>' +
+          '<select class="zoneadd" data-zone="cols"></select></div>' +
+        '<div><div class="plabel">Value</div><div class="zone" id="pv-value"></div>' +
+          '<select class="zoneadd" data-zone="value"></select>' +
+          '<div class="aggrow"><label class="fld" for="pv-agg">Summarise by</label>' +
+          '<select id="pv-agg"></select></div></div>' +
+      '</div>' +
+      '<div class="pivot-hint"><b>Tip:</b> Sum is right for per-row measures like Supply quantity. ' +
+        'For a field that repeats across rows of the same task (Total time, Number of people), ' +
+        'use Average or Max instead — summing it would multiply by the number of rows.</div>' +
+      '<div id="pv-out"></div>' +
+      '<div class="stack-actions"><button class="btn primary" id="pv-dl">Download this view as Excel</button></div>';
+
+    var pool   = panel.querySelector("#pv-pool");
+    var zRows  = panel.querySelector("#pv-rows");
+    var zCols  = panel.querySelector("#pv-cols");
+    var zVal   = panel.querySelector("#pv-value");
+    var aggSel = panel.querySelector("#pv-agg");
+    var out    = panel.querySelector("#pv-out");
+    var lastAoa = null;
+
+    Object.keys(AGGS).forEach(function(k){
+      var o = document.createElement("option");
+      o.value = k; o.textContent = AGGS[k].label;
+      aggSel.appendChild(o);
+    });
+    aggSel.value = pv.agg;
+    aggSel.addEventListener("change", function(){ pv.agg = aggSel.value; draw(); });
+
+    function place(field, zone){
+      pv.rows = pv.rows.filter(function(x){ return x !== field; });
+      pv.cols = pv.cols.filter(function(x){ return x !== field; });
+      if(pv.value === field) pv.value = null;
+      if(zone === "rows") pv.rows.push(field);
+      else if(zone === "cols") pv.cols.push(field);
+      else if(zone === "value") pv.value = field;
+      draw();
+    }
+    function remove(field){
+      pv.rows = pv.rows.filter(function(x){ return x !== field; });
+      pv.cols = pv.cols.filter(function(x){ return x !== field; });
+      if(pv.value === field) pv.value = null;
+      draw();
+    }
+    function chip(field, placed){
+      var el = document.createElement("span");
+      el.className = "pchip" + (placed ? " placed" : "");
+      el.draggable = true;
+      el.innerHTML = '<span>' + esc(field) + '</span>' +
+        (placed ? '<button class="px" title="Remove" aria-label="Remove ' + esc(field) + '">&times;</button>' : '');
+      el.addEventListener("dragstart", function(e){
+        e.dataTransfer.setData("text/plain", field);
+        e.dataTransfer.effectAllowed = "move";
+      });
+      if(placed){
+        el.querySelector(".px").addEventListener("click", function(e){
+          e.stopPropagation(); remove(field);
+        });
+      }
+      return el;
+    }
+    function wireZone(el, zone){
+      el.addEventListener("dragover", function(e){ e.preventDefault(); el.classList.add("over"); });
+      el.addEventListener("dragleave", function(){ el.classList.remove("over"); });
+      el.addEventListener("drop", function(e){
+        e.preventDefault(); el.classList.remove("over");
+        var f = e.dataTransfer.getData("text/plain");
+        if(f) place(f, zone);
+      });
+    }
+    wireZone(zRows, "rows"); wireZone(zCols, "cols"); wireZone(zVal, "value");
+    pool.addEventListener("dragover", function(e){ e.preventDefault(); });
+    pool.addEventListener("drop", function(e){
+      e.preventDefault();
+      var f = e.dataTransfer.getData("text/plain");
+      if(f) remove(f);
+    });
+    // Keyboard / touch fallback: pick a field from a dropdown instead of dragging.
+    Array.prototype.forEach.call(panel.querySelectorAll(".zoneadd"), function(sel){
+      sel.addEventListener("change", function(){
+        if(sel.value){ place(sel.value, sel.dataset.zone); }
+      });
+    });
+
+    function fillZone(el, fields, emptyText){
+      el.innerHTML = "";
+      if(!fields.length){
+        var e = document.createElement("div");
+        e.className = "zempty"; e.textContent = emptyText;
+        el.appendChild(e);
+        return;
+      }
+      fields.forEach(function(f){ el.appendChild(chip(f, true)); });
+    }
+
+    function draw(){
+      var used = pv.rows.concat(pv.cols).concat(pv.value ? [pv.value] : []);
+      pool.innerHTML = "";
+      var free = headers.filter(function(h){ return used.indexOf(h) < 0; });
+      if(!free.length){
+        pool.innerHTML = '<div class="zempty">All fields are in use — drag one back here to free it.</div>';
+      } else {
+        free.forEach(function(h){ pool.appendChild(chip(h, false)); });
+      }
+
+      fillZone(zRows, pv.rows, "Drag fields here");
+      fillZone(zCols, pv.cols, "Drag fields here");
+      fillZone(zVal, pv.value ? [pv.value] : [], "Drag one field here");
+
+      Array.prototype.forEach.call(panel.querySelectorAll(".zoneadd"), function(sel){
+        var zone = sel.dataset.zone;
+        sel.innerHTML = '<option value="">+ add a field…</option>';
+        free.forEach(function(h){
+          var o = document.createElement("option");
+          o.value = h; o.textContent = h;
+          sel.appendChild(o);
+        });
+        sel.value = "";
+        sel.disabled = (zone === "value" && !!pv.value) || !free.length;
+      });
+
+      // With no value field the only meaningful measure is a row count.
+      var aggKey = pv.value ? pv.agg : "count";
+      aggSel.disabled = !pv.value;
+      aggSel.value = pv.value ? pv.agg : "count";
+
+      if(!pv.rows.length && !pv.cols.length && !pv.value){
+        out.innerHTML = '<div class="empty">Drag at least one field into Rows or Columns to start.</div>';
+        lastAoa = null;
+        return;
+      }
+
+      var p = pivotCompute(rows, pv.rows, pv.cols, pv.value, aggKey);
+      if(p.colKeys.length > 60){
+        out.innerHTML = '<div class="empty">That column field has ' + p.colKeys.length +
+          ' distinct values — too many to show side by side. Try moving it to <b>Rows</b>, ' +
+          'or pick a field with fewer values.</div>';
+        lastAoa = null;
+        return;
+      }
+
+      // Keep exported numbers readable: full integers stay exact, derived
+      // values (e.g. H:MM:SS converted to hours) round to 4dp instead of 1e-13 tails.
+      function xl(v){ return v == null ? "" : Math.round(v * 10000) / 10000; }
+
+      var measure = (pv.value ? AGGS[aggKey].label + " of " + pv.value : "Count of rows");
+      var rowHeads = pv.rows.length ? pv.rows.slice() : ["All"];
+      var colHeads = p.colKeys.map(function(ck){ return ck === "" ? measure : ck.split(SEP).join(" / "); });
+
+      var aoa = [rowHeads.concat(colHeads).concat(["Total"])];
+      var html = '<div class="tablewrap"><table><thead><tr>';
+      rowHeads.forEach(function(h){ html += '<th>' + esc(h) + '</th>'; });
+      colHeads.forEach(function(h){ html += '<th class="num">' + esc(h) + '</th>'; });
+      html += '<th class="num tot">Total</th></tr></thead><tbody>';
+
+      p.rowKeys.forEach(function(rk){
+        var labels = pv.rows.length ? rk.split(SEP) : ["All"];
+        var line = labels.slice();
+        html += '<tr>';
+        labels.forEach(function(l){ html += '<td class="rowlab">' + esc(l) + '</td>'; });
+        p.colKeys.forEach(function(ck){
+          var v = p.cells[rk][ck];
+          line.push(xl(v));
+          html += '<td class="num">' + esc(fmtNum(v)) + '</td>';
+        });
+        line.push(xl(p.rowTot[rk]));
+        html += '<td class="num tot">' + esc(fmtNum(p.rowTot[rk])) + '</td></tr>';
+        aoa.push(line);
+      });
+
+      html += '</tbody><tfoot><tr>';
+      var footer = ["Total"];
+      html += '<td>Total</td>';
+      for(var i = 1; i < rowHeads.length; i++){ html += '<td></td>'; footer.push(""); }
+      p.colKeys.forEach(function(ck){
+        footer.push(xl(p.colTot[ck]));
+        html += '<td class="num">' + esc(fmtNum(p.colTot[ck])) + '</td>';
+      });
+      footer.push(xl(p.grand));
+      html += '<td class="num">' + esc(fmtNum(p.grand)) + '</td></tr></tfoot></table></div>' +
+        '<div class="foot">' + esc(measure) + ' · ' + p.rowKeys.length + ' row' +
+        (p.rowKeys.length === 1 ? "" : "s") + ' × ' + p.colKeys.length + ' column' +
+        (p.colKeys.length === 1 ? "" : "s") + '</div>';
+      aoa.push(footer);
+
+      out.innerHTML = html;
+      lastAoa = aoa;
+    }
+
+    panel.querySelector("#pv-dl").addEventListener("click", function(){
+      if(!lastAoa){ return; }
+      var widths = lastAoa[0].map(function(h, i){
+        return { wch: Math.min(40, Math.max(10, String(h).length + 4 + (i === 0 ? 16 : 0))) };
+      });
+      downloadSheet(lastAoa, widths, "Custom view", "custom-report.xlsx");
+    });
+
+    draw();
+    return panel;
+  }
+
   /* ---------- UI wiring ---------- */
   var drop = document.getElementById("drop");
   var fileInput = document.getElementById("file");
   var fileListEl = document.getElementById("filelist");
+  var reportCtl = document.getElementById("reportctl");
   var reportSel = document.getElementById("report");
   var resultsEl = document.getElementById("results");
 
-  REPORTS.forEach(function(r){
-    var opt = document.createElement("option");
-    opt.value = r.id;
-    opt.textContent = r.label;
-    reportSel.appendChild(opt);
-  });
+  var state = { name:null, rows:[], headers:[], reportId:null };
+
+  (function fillReportSelect(){
+    var none = document.createElement("option");
+    none.value = ""; none.textContent = "No fixed report — pivot only";
+    reportSel.appendChild(none);
+    REPORTS.forEach(function(r){
+      var opt = document.createElement("option");
+      opt.value = r.id; opt.textContent = r.label;
+      reportSel.appendChild(opt);
+    });
+  })();
+
+  function detectReport(name){
+    for(var i = 0; i < REPORTS.length; i++){
+      if(REPORTS[i].sourceMatch.test(name)) return REPORTS[i];
+    }
+    return null;
+  }
 
   function renderFileList(){
     fileListEl.innerHTML = "";
-    files.forEach(function(f, i){
-      var recognized = nameIsRecognized(f.name);
-      var li = document.createElement("li");
-      li.innerHTML =
-        '<span class="name">' + esc(f.name) + '</span>' +
-        '<span class="tag ' + (recognized ? "ok" : "no") + '">' +
-          (recognized ? "recognized" : "not used yet") + '</span>' +
-        '<button class="x" aria-label="Remove ' + esc(f.name) + '">&times;</button>';
-      li.querySelector("button.x").addEventListener("click", function(){
-        files.splice(i, 1);
-        renderFileList();
-        renderSelected();
-      });
-      fileListEl.appendChild(li);
+    if(!state.name){ reportCtl.hidden = true; return; }
+    reportCtl.hidden = false;
+    var detected = detectReport(state.name);
+    var li = document.createElement("li");
+    li.innerHTML =
+      '<span class="name">' + esc(state.name) + '</span>' +
+      '<span class="tag ' + (detected ? "ok" : "no") + '">' +
+        (detected ? "recognized · " + esc(detected.label) : "not recognized") + '</span>' +
+      '<button class="x" aria-label="Remove file">&times;</button>';
+    li.querySelector("button.x").addEventListener("click", function(){
+      state = { name:null, rows:[], headers:[], reportId:null };
+      fileInput.value = "";
+      renderFileList();
+      renderResults();
     });
+    fileListEl.appendChild(li);
   }
 
-  function renderSelected(){
-    var report = REPORTS.find(function(r){ return r.id === reportSel.value; });
+  function renderResults(){
     resultsEl.innerHTML = "";
-    if(!report) return;
 
-    var rows = collectRows(report);
-    if(!rows){
-      var p = document.createElement("section");
-      p.className = "panel";
-      p.innerHTML = '<h2>' + esc(report.label) + '</h2>' +
-        '<div class="empty">No matching file loaded yet. Expected: <b>' + esc(report.sourceHint) + '</b></div>';
-      resultsEl.appendChild(p);
+    if(!state.name){
+      var hint = document.createElement("section");
+      hint.className = "panel";
+      hint.innerHTML = '<h2>No file yet</h2>' +
+        '<div class="empty">Upload one Breezeway export to begin. The report is picked ' +
+        'automatically from the file name — recognized so far: ' +
+        REPORTS.map(function(r){ return '<b>' + esc(r.sourceHint) + '</b>'; }).join(", ") +
+        '. Any other export still works with the pivot builder.</div>';
+      resultsEl.appendChild(hint);
       return;
     }
-    resultsEl.appendChild(report.render(rows));
+
+    if(!state.rows.length){
+      var er = document.createElement("section");
+      er.className = "panel";
+      er.innerHTML = '<h2>Nothing to read</h2>' +
+        '<div class="empty">That file has no data rows we could parse.</div>';
+      resultsEl.appendChild(er);
+      return;
+    }
+
+    var report = REPORTS.find(function(r){ return r.id === state.reportId; });
+    if(report){
+      var mapped = mapRows(report, state.rows);
+      if(mapped) resultsEl.appendChild(report.render(mapped));
+    } else {
+      var nb = document.createElement("section");
+      nb.className = "panel";
+      nb.innerHTML = '<h2>No fixed report for this file</h2>' +
+        '<div class="empty">We don\'t have a prebuilt report for <b>' + esc(state.name) +
+        '</b> yet — but all ' + state.headers.length + ' of its columns are available in the ' +
+        'pivot builder below.</div>';
+      resultsEl.appendChild(nb);
+    }
+
+    resultsEl.appendChild(buildPivotPanel(state.rows, state.headers));
   }
 
   var ALLOWED = /\.(csv|xlsx|xls)$/i;
 
-  function addFiles(list){
-    var arr = Array.prototype.slice.call(list);
-    (function next(k){
-      if(k >= arr.length){ renderFileList(); renderSelected(); return; }
-      var file = arr[k];
-      if(!ALLOWED.test(file.name)){ next(k+1); return; }
-      if(files.length >= 10){ next(arr.length); return; }
-      if(files.some(function(f){ return f.name === file.name; })){ next(k+1); return; }
-      var isCsv = /\.csv$/i.test(file.name);
-      var reader = new FileReader();
-      reader.onload = function(){
-        try{
-          var wb = isCsv
-            // CSV: read as UTF-8 text so accented / bilingual item names survive.
-            ? XLSX.read(reader.result, { type:"string", cellDates:true })
-            : XLSX.read(new Uint8Array(reader.result), { type:"array", cellDates:true });
-          files.push({ name:file.name, workbook:wb });
-        }catch(e){ /* skip unreadable file */ }
-        next(k+1);
+  function setFile(file){
+    if(!file || !ALLOWED.test(file.name)){
+      alert("Please choose a .csv, .xlsx or .xls file.");
+      return;
+    }
+    var isCsv = /\.csv$/i.test(file.name);
+    var reader = new FileReader();
+    reader.onload = function(){
+      var wb;
+      try{
+        wb = isCsv
+          // CSV: read as UTF-8 text so accented / bilingual item names survive.
+          ? XLSX.read(reader.result, { type:"string", cellDates:true })
+          : XLSX.read(new Uint8Array(reader.result), { type:"array", cellDates:true });
+      }catch(e){
+        alert("Could not read that file.");
+        return;
+      }
+      var sheet = readSheet(wb);
+      var detected = detectReport(file.name) || detectReport(sheet.sheetName);
+      state = {
+        name: file.name,
+        rows: sheet.rows,
+        headers: headersOf(sheet.rows),
+        reportId: detected ? detected.id : ""
       };
-      reader.onerror = function(){ next(k+1); };
-      if(isCsv) reader.readAsText(file);
-      else reader.readAsArrayBuffer(file);
-    })(0);
+      reportSel.value = state.reportId;
+      renderFileList();
+      renderResults();
+    };
+    reader.onerror = function(){ alert("Could not read that file."); };
+    if(isCsv) reader.readAsText(file);
+    else reader.readAsArrayBuffer(file);
   }
 
   drop.addEventListener("click", function(){ fileInput.click(); });
   drop.addEventListener("keydown", function(e){
     if(e.key === "Enter" || e.key === " "){ e.preventDefault(); fileInput.click(); }
   });
-  fileInput.addEventListener("change", function(){ addFiles(fileInput.files); fileInput.value = ""; });
+  fileInput.addEventListener("change", function(){
+    if(fileInput.files && fileInput.files[0]) setFile(fileInput.files[0]);
+  });
 
   ["dragenter","dragover"].forEach(function(ev){
     drop.addEventListener(ev, function(e){ e.preventDefault(); drop.classList.add("drag"); });
@@ -504,12 +892,18 @@
     drop.addEventListener(ev, function(e){ e.preventDefault(); drop.classList.remove("drag"); });
   });
   drop.addEventListener("drop", function(e){
-    if(e.dataTransfer && e.dataTransfer.files) addFiles(e.dataTransfer.files);
+    if(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]){
+      setFile(e.dataTransfer.files[0]);
+    }
   });
 
-  reportSel.addEventListener("change", renderSelected);
+  reportSel.addEventListener("change", function(){
+    state.reportId = reportSel.value;
+    renderResults();
+  });
 
-  renderSelected();
+  renderFileList();
+  renderResults();
 })();
 </script>
 </body>
